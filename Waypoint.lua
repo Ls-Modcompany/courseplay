@@ -129,6 +129,10 @@ function Waypoint:getOffsetPosition(offsetX, offsetZ, dx, dz)
 	return x, y, z
 end
 
+function Waypoint:setOffsetPosition(offsetX, offsetZ, dx, dz)
+	self.x, self.y, self.z = self:getOffsetPosition(offsetX, offsetZ, dx, dz)
+end
+
 function Waypoint:getDistanceFromPoint(x, z)
 	return courseplay:distance(x, z, self.x, self.z)
 end
@@ -231,17 +235,7 @@ Course = CpObject()
 function Course:init(vehicle, waypoints, temporary, first, last)
 	-- add waypoints from current vehicle course
 	---@type Waypoint[]
-	self.waypoints = setmetatable({}, {
-		-- add a function to clamp the index between 1 and #self.waypoints
-		__index = function(tbl, key)
-			local result = rawget(tbl, key)
-			if not result and type(key) == "number" then
-				result = rawget(tbl, math.min(math.max(1, key), #tbl))
-				courseplay.debugFormat(14, 'Invalid index %s, clamped to %s', key, math.min(math.max(1, key), #tbl))
-			end
-			return result
-		end
-	})
+	self.waypoints = self:initWaypoints()
 	local n = 0
 	for i = first or 1, last or #waypoints do
 		-- make sure we pass in the original vehicle.Waypoints index with n+first
@@ -259,10 +253,27 @@ function Course:init(vehicle, waypoints, temporary, first, last)
 	self.currentWaypoint = 1
 end
 
+function Course:initWaypoints()
+	return setmetatable({}, {
+		-- add a function to clamp the index between 1 and #self.waypoints
+		__index = function(tbl, key)
+			local result = rawget(tbl, key)
+			if not result and type(key) == "number" then
+				result = rawget(tbl, math.min(math.max(1, key), #tbl))
+				courseplay.debugFormat(14, 'Invalid index %s, clamped to %s', key, math.min(math.max(1, key), #tbl))
+			end
+			return result
+		end
+	})
+end
+
 --- Current offset to apply. getWaypointPosition() will always return the position adjusted by the
 -- offset. The x and z offset are in the waypoint's coordinate system, waypoints are directed towards
 -- the next waypoint, so a z = 1 offset will move the waypoint 1m forward, x = 1 1 m to the left (when
 -- looking in the drive direction)
+--- IMPORTANT: the offset for multitool (laneOffset) must not be part of this as it is already part of the
+--- course,
+--- @see Course#calculateOffsetCourse()
 function Course:setOffset(x, z)
 	self.offsetX, self.offsetZ = x, z
 end
@@ -437,8 +448,12 @@ function Course:isWaitAt(ix)
 	return self.waypoints[ix].interact
 end
 
-function Course:isOnHeadland(ix)
-	return self.waypoints[ix].lane and self.waypoints[ix].lane < 0
+function Course:isOnHeadland(ix, n)
+	if n then
+		return self.waypoints[ix].lane and self.waypoints[ix].lane == -n
+	else
+		return self.waypoints[ix].lane and self.waypoints[ix].lane < 0
+	end
 end
 
 function Course:isOnOutermostHeadland(ix)
@@ -898,3 +913,154 @@ function Course:setUseTightTurnOffsetForLastWaypoints(d)
 	self:executeFunctionForLastWaypoints(d, function(wp) wp.useTightTurnOffset = true end)
 end
 
+---@param headland number of headland, starting at 1 on the outermost headland, all headlands if nil
+---@return Polygon headland of the course as polyline (x, y)
+function Course:getHeadland(headland)
+	local headlands = Polygon:new()
+	for i = 1, self:getNumberOfWaypoints() do
+		if self:isOnHeadland(i, headland) then
+			local x, y, z = self:getWaypointPosition(i)
+			headlands:add({x = x, y = -z})
+		end
+	end
+	return headlands
+end
+
+function Course:replaceHeadlands(newHeadlands)
+	local origIx, newIx = 1, 1
+	local newWaypoints = self:initWaypoints()
+	local newHeadlandInserted = false
+	while origIx <= #self.waypoints do
+		if self:isOnHeadland(origIx) then
+			if not newHeadlandInserted then
+				-- first headland wp found, add new headland here
+				for _, p in ipairs(newHeadlands) do
+					table.insert(newWaypoints, Waypoint({x = p.x, z = -p.y}, #newWaypoints))
+				end
+				newHeadlandInserted = true
+			end
+			-- skip this wp when new headland already added
+		else
+			table.insert(newWaypoints, self.waypoints[origIx])
+		end
+		origIx = origIx + 1
+	end
+	self.waypoints = newWaypoints
+	self:enrichWaypointData()
+end
+
+--- Move every non-headland waypoint of the course (up/down rows only) to their offset position
+function Course:offsetUpDownRows(offsetX, offsetZ)
+	for i, _ in ipairs(self.waypoints) do
+		if not self:isOnHeadland(i) then
+			if self:isTurnStartAtIx(i) then
+				-- turn start waypoints point to the turn end wp, for example at the row end they point 90 degrees to the side
+				-- from the row direction. This is a problem when there's an offset so use the direction of the previous wp
+				-- when calculating the offset for a turn start wp.
+				self.waypoints[i]:setOffsetPosition(offsetX, offsetZ, self.waypoints[i - 1].dx, self.waypoints[i - 1].dz)
+			else
+				self.waypoints[i]:setOffsetPosition(offsetX, offsetZ)
+			end
+		end
+	end
+	self:enrichWaypointData()
+end
+
+--- Calculate an offset course from an existing course. This is used when multiple vehicles working on
+--- the same field. In this case we only generate one course with the total implement width of all vehicles and use
+--- the same course for all vehicles, only with different offsets (multitool).
+--- Naively offsetting all waypoints may result in undrivable courses at corners, especially with offsets towards the
+--- inside of the field. Therefore, we use the grassfire algorithm from the course generator to generate a drivable
+--- offset headland.
+---
+--- In short, if multitool is used every vehicle of the pack gets a new course generated when it is started (and its
+--- position in the pack is known).
+---
+--- The up/down row offset (laneOffset) is therefore not applied to the course being driven anymore, only the tool
+--- and other offsets.
+---
+--- @param nVehicles number of vehicles working together
+--- @param position number an integer defining the position of this vehicle within the group, negative numbers are to
+--- the left, positives to the right. For example, a -2 means that this is the second vehicle to the left (and thus,
+--- there are at least 4 vehicles in the group), a 0 means the vehicle in the middle, for which obviously no offset
+--- headland is required as it it driving on the original headland.
+--- @param width number working width of one vehicle
+--- @return Course the course with the appropriate offset applied.
+function Course:calculateOffsetCourse(nVehicles, position, width)
+	-- find out the absolute offset in meters first
+	local offset
+	if nVehicles % 2 == 0 then
+		-- even number of vehicles
+		offset = math.abs(position) * width - width / 2
+	else
+		offset = math.abs(position) * width
+	end
+	-- correct for side
+	offset = position >= 0 and offset or -offset
+
+	local fromInside = position < 0
+	local origHeadlands = self:getHeadland(nil)
+	origHeadlands:calculateData()
+
+	local offsetHeadlands = calculateHeadlandTrack( origHeadlands, courseGenerator.HEADLAND_MODE_NORMAL	, origHeadlands.isClockwise,
+			math.abs(offset), 0.5, math.rad( 25 ), math.rad( 60 ), 0, true, not fromInside,
+			{}, 1 )
+
+	offsetHeadlands:calculateData()
+	addTurnsToCorners(offsetHeadlands, math.rad(60), true)
+
+	local offsetCourse = Course(self.vehicle, self.waypoints)
+	offsetCourse:offsetUpDownRows(offset, 0)
+	if offsetHeadlands then
+		offsetCourse:replaceHeadlands(offsetHeadlands, offset)
+	else
+		courseplay.info('Could not generate offset headlands')
+	end
+	-- apply tool offset to new course
+	offsetCourse:setOffset(self.offsetX, self.offsetZ)
+	return offsetCourse
+end
+
+--- @param node table the node around we are looking for waypoints
+--- @return number, number, number, number the waypoint closest to node, its distance, the waypoint closest to the node
+--- pointing approximately (+-45) in the same direction as the node and its distance
+function Course:getNearestWaypoints(node)
+	local x, _, z = getWorldTranslation(node)
+	local lx, _, lz = localDirectionToWorld(node, 0, 0, 1)
+	local nodeAngle = math.atan2(lx, lz)
+	local maxDeltaAngle = math.pi / 4
+	local dClosest, dClosestRightDirection = math.huge, math.huge
+	local ixClosest, ixClosestRightDirection = 1, 1
+
+	for i, p in ipairs(self.waypoints) do
+		local d = p:getDistanceFromPoint(x, z)
+		if d < dClosest then
+			dClosest = d
+			ixClosest = i
+		end
+		local deltaAngle = math.abs(getDeltaAngle(math.rad(p.angle), nodeAngle))
+		if d < dClosestRightDirection and deltaAngle < maxDeltaAngle then
+			dClosestRightDirection = d
+			ixClosestRightDirection = i
+		end
+	end
+
+	return ixClosest, dClosest, ixClosestRightDirection, dClosestRightDirection
+end
+
+--- Based on what option the user selected, find the waypoint index to start this course
+--- @param node table the node around we are looking for waypoints
+--- @param startingPoint StartingPointSetting at which waypoint to start the course
+function Course:getStartingWaypointIx(node, startingPoint)
+	if startingPoint:is(StartingPointSetting.START_AT_FIRST_POINT) then
+		return 1
+	end
+	local ixClosest, _, ixClosestRightDirection, _ = self:getNearestWaypoints(node)
+	if startingPoint:is(StartingPointSetting.START_AT_NEAREST_POINT) then
+		return ixClosest
+	end
+	if startingPoint:is(StartingPointSetting.START_AT_NEXT_POINT) then
+		return ixClosestRightDirection
+	end
+	return self:getCurrentWaypointIx()
+end

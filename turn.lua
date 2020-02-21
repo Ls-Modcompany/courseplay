@@ -2598,6 +2598,7 @@ function TurnContext:setTargetNode(node)
 	self.targetNode = node
 end
 
+-- TODO: this should be a global util function, not under TurnContext
 function TurnContext:getNodeDirection(node)
 	local lx, _, lz = localDirectionToWorld(node, 0, 0, 1)
 	return math.atan2( lx, lz )
@@ -2685,13 +2686,13 @@ end
 ---@param vehicle table
 ---@param r number turning radius in m
 ---@param sideOffset number (left < 0, right > 0) side offset to use when the course has an offset, for example
---- due to a tool or multi tool setting. When not supplied the total offset X set for the vehicle is used
+--- due to a tool setting. When not supplied the tool offset X set for the vehicle is used
 function TurnContext:createCorner(vehicle, r, sideOffset)
 	-- use the average angle of the turn end and the next wp as there is often a bend there
 	local endAngleDeg = self:getAverageEndAngleDeg()
 	courseplay.debugVehicle(14, vehicle, 'start angle: %.1f, end angle: %.1f (from %.1f and %.1f)', self.beforeTurnStartWp.angle,
 		endAngleDeg, self.turnEndWp.angle, self.afterTurnEndWp.angle)
-	return Corner(vehicle, self.beforeTurnStartWp.angle, self.turnStartWp, endAngleDeg, self.turnEndWp, r, sideOffset or vehicle.cp.totalOffsetX)
+	return Corner(vehicle, self.beforeTurnStartWp.angle, self.turnStartWp, endAngleDeg, self.turnEndWp, r, sideOffset or vehicle.cp.toolOffsetX)
 end
 
 --- Create a turn ending course using the vehicle's current position and the front marker node (where the vehicle must

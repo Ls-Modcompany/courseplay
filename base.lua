@@ -166,7 +166,6 @@ function courseplay:onLoad(savegame)
 	self.cp.generationPosition = {}
 	self.cp.generationPosition.hasSavedPosition = false
 	
-	self.cp.startAtPoint = courseplay.START_AT_NEAREST_POINT;
 	self.cp.fertilizerEnabled = true
 	self.cp.convoyActive = false
 	self.cp.convoy= {
@@ -583,6 +582,7 @@ function courseplay:onLoad(savegame)
 	self.cp.settings:addSetting(ImplementLowerTimeSetting, self)
 	self.cp.settings:addSetting(AutoDriveModeSetting, self)
 	self.cp.settings:addSetting(SelfUnloadSetting, self)
+	self.cp.settings:addSetting(StartingPointSetting, self)
 end;
 
 function courseplay:onPostLoad(savegame)
