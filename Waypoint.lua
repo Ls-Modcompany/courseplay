@@ -103,6 +103,23 @@ function Waypoint:set(cpWp, cpIndex)
 	self.changeDirectionWhenAligned = cpWp.changeDirectionWhenAligned
 end
 
+--- Set from a generated waypoint (output of the course generator)
+function Waypoint.initFromGeneratedWp(wp, ix)
+	local waypoint = Waypoint({})
+	waypoint.x = wp.x
+	waypoint.z = -wp.y
+	-- for backwards compatibility only
+	waypoint.cx = waypoint.x
+	waypoint.cz = waypoint.z
+	waypoint.cpIndex = ix or 0
+	waypoint.turnStart = wp.turnStart
+	waypoint.turnEnd = wp.turnEnd
+	waypoint.isConnectingTrack = wp.isConnectingTrack or nil
+	waypoint.lane = wp.passNumber and -wp.passNumber
+	waypoint.ridgeMarker = wp.ridgeMarker
+	return waypoint
+end
+
 --- Get the (original, non-offset) position of a waypoint
 ---@return number, number, number x, y, z
 function Waypoint:getPosition()
@@ -240,7 +257,7 @@ function Course:init(vehicle, waypoints, temporary, first, last)
 	for i = first or 1, last or #waypoints do
 		-- make sure we pass in the original vehicle.Waypoints index with n+first
 		table.insert(self.waypoints, Waypoint(waypoints[i], n + (first or 1)))
-		n = n + 1	
+		n = n + 1
 	end
 	-- offset to apply to every position
 	self.offsetX, self.offsetZ = 0, 0
@@ -251,6 +268,14 @@ function Course:init(vehicle, waypoints, temporary, first, last)
 	self.vehicle = vehicle
 	self.temporary = temporary or false
 	self.currentWaypoint = 1
+end
+
+function Course.createFromGeneratedCourse(vehicle, waypoints, temporary, first, last)
+	local course = Course(vehicle, {}, temporary)
+	for i = first or 1, last or #waypoints do
+		table.insert(course.waypoints, Waypoint.initFromGeneratedWp(waypoints[i], i))
+	end
+	return course
 end
 
 function Course:initWaypoints()
@@ -916,11 +941,11 @@ end
 ---@param headland number of headland, starting at 1 on the outermost headland, all headlands if nil
 ---@return Polygon headland of the course as polyline (x, y)
 function Course:getHeadland(headland)
-	local headlands = Polygon:new()
+	local headlands = Polyline:new()
 	for i = 1, self:getNumberOfWaypoints() do
 		if self:isOnHeadland(i, headland) then
 			local x, y, z = self:getWaypointPosition(i)
-			headlands:add({x = x, y = -z})
+			headlands:add({x = x, y = -z, turnStart = self:isTurnStartAtIx(i), turnEnd = self:isTurnEndAtIx(i)})
 		end
 	end
 	return headlands
@@ -935,7 +960,7 @@ function Course:replaceHeadlands(newHeadlands)
 			if not newHeadlandInserted then
 				-- first headland wp found, add new headland here
 				for _, p in ipairs(newHeadlands) do
-					table.insert(newWaypoints, Waypoint({x = p.x, z = -p.y}, #newWaypoints))
+					table.insert(newWaypoints, Waypoint.initFromGeneratedWp(p, #newWaypoints))
 				end
 				newHeadlandInserted = true
 			end
@@ -998,17 +1023,16 @@ function Course:calculateOffsetCourse(nVehicles, position, width)
 	-- correct for side
 	offset = position >= 0 and offset or -offset
 
-	local fromInside = position < 0
 	local origHeadlands = self:getHeadland(nil)
 	origHeadlands:calculateData()
-
+	-- generating inward when on the right side and clockwise or when on the left side ccw
+	local inward = (position > 0 and origHeadlands.isClockwise) or (position < 0 and not origHeadlands.isClockwise)
 	local offsetHeadlands = calculateHeadlandTrack( origHeadlands, courseGenerator.HEADLAND_MODE_NORMAL	, origHeadlands.isClockwise,
-			math.abs(offset), 0.5, math.rad( 25 ), math.rad( 60 ), 0, true, not fromInside,
+			math.abs(offset), 0.5, math.rad( 25 ), math.rad( 60 ), 0, true, inward,
 			{}, 1 )
 
 	offsetHeadlands:calculateData()
 	addTurnsToCorners(offsetHeadlands, math.rad(60), true)
-
 	local offsetCourse = Course(self.vehicle, self.waypoints)
 	offsetCourse:offsetUpDownRows(offset, 0)
 	if offsetHeadlands then
@@ -1016,6 +1040,7 @@ function Course:calculateOffsetCourse(nVehicles, position, width)
 	else
 		courseplay.info('Could not generate offset headlands')
 	end
+	offsetCourse:print()
 	-- apply tool offset to new course
 	offsetCourse:setOffset(self.offsetX, self.offsetZ)
 	return offsetCourse

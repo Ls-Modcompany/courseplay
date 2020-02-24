@@ -46,7 +46,10 @@ function pointToString(p)
 	if p.prevEdge then
 		fromAngle = string.format('%.1f', math.deg(p.prevEdge.angle))
 	end
-	return string.format('x=%.1f y=%.1f %s -> %s', p.x, p.y, fromAngle, toAngle) .. (p.reverse and '(rev)' or '')
+	local turn = p.turnStart and ' (start)' or ''
+	turn = p.turnEnd and ' (end)' or turn
+	return string.format('x=%.1f y=%.1f %s -> %s',
+			p.x, p.y, fromAngle, toAngle) .. (p.reverse and '(rev)' or '' .. turn)
 end
 
 -- calculates the polar coordinates of x, y with some filtering
@@ -104,7 +107,7 @@ end
 -- -pi/2 and + pi/2
 function getDeltaAngle( a1, a2 )
 	-- convert the 0 - -180 range into 180 - 360
-	if math.abs( a1 - a2 ) > math.pi then
+		if math.abs( a1 - a2 ) > math.pi then
 		a1 = normalizeAngle( a1 )
 		a2 = normalizeAngle( a2 )
 	end
@@ -720,7 +723,7 @@ function Polyline:calculateData()
 			dx = cp.x - pp.x
 			dy = cp.y - pp.y
 			angle, length = toPolar( dx, dy )
-			self[ i ].prevEdge = { from={ x=pp.x, y=pp.y} , to={ x=cp.x, y=cp.y }, angle=angle, length=length, dx=dx, dy=dy }
+			self[ i ].prevEdge = { from=pp , to=cp, angle=angle, length=length, dx=dx, dy=dy }
 			if length < shortestEdgeLength then shortestEdgeLength = length end
 			-- detect clockwise/counterclockwise direction
 			if pp.prevEdge and cp.prevEdge then
@@ -734,7 +737,7 @@ function Polyline:calculateData()
 			dx = np.x - cp.x
 			dy = np.y - cp.y
 			angle, length = toPolar( dx, dy )
-			self[ i ].nextEdge = { from = { x=cp.x, y=cp.y }, to={x=np.x, y=np.y}, angle=angle, length=length, dx=dx, dy=dy }
+			self[ i ].nextEdge = { from = cp, to=np, angle=angle, length=length, dx=dx, dy=dy }
 			if length < shortestEdgeLength then shortestEdgeLength = length end
 			addToDirectionStats( directionStats, angle, length )
 			area = area + ( cp.x * np.y - cp.y * np.x )
