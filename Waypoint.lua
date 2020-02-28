@@ -105,9 +105,6 @@ function Waypoint.initFromGeneratedWp(wp, ix)
 	local waypoint = Waypoint({})
 	waypoint.x = wp.x
 	waypoint.z = -wp.y
-	-- for backwards compatibility only
-	--waypoint.cx = waypoint.x
-	--waypoint.cz = waypoint.z
 	waypoint.cpIndex = ix or 0
 	waypoint.turnStart = wp.turnStart
 	waypoint.turnEnd = wp.turnEnd
@@ -260,13 +257,13 @@ function Course:init(vehicle, waypoints, temporary, first, last)
 	self.offsetX, self.offsetZ = 0, 0
 	self.numberOfHeadlands = 0
 	self.workWidth = 0
-	self:enrichWaypointData()
 	-- only for logging purposes
 	self.vehicle = vehicle
 	self.temporary = temporary or false
 	self.currentWaypoint = 1
 	self.length = 0
 	self.totalTurns = 0
+	self:enrichWaypointData()
 	courseplay.debugFormat(12, 'Course with %d waypoints created, %.1f meters, %d turns', #self.waypoints, self.length, self.totalTurns)
 end
 
@@ -855,9 +852,7 @@ end
 --- Append waypoints to the course
 function Course:appendWaypoints(waypoints)
 	for i = 1, #waypoints do
-		printTable(waypoints[i])
 		table.insert(self.waypoints, Waypoint(waypoints[i], #self.waypoints + 1))
-		print(self.waypoints[#self.waypoints].x, waypoints[i].x, self.waypoints[#self.waypoints].z, waypoints[i].z)
 	end
 	self:enrichWaypointData()
 end
@@ -902,8 +897,8 @@ function Course:createLegacyCourse()
 	for i = 1, #self.waypoints do
 		local x, _, z = self:getWaypointPosition(i)
 		legacyCourse[i] = {
-			cx = x,
-			cz = z,
+			x = x,
+			z = z,
 			angle = self:getWaypointAngleDeg(i)
 		}
 	end
