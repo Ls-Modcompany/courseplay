@@ -968,39 +968,21 @@ function Course:getNextSectionWithProperty(startIx, hasProperty)
 	return section, self:getNumberOfWaypoints()
 end
 
-function Course:replaceHeadlands(newHeadlands)
-	local origIx, newIx = 1, 1
-	local newWaypoints = self:initWaypoints()
-	local newHeadlandInserted = false
-	while origIx <= #self.waypoints do
-		if self:isOnHeadland(origIx) then
-			if not newHeadlandInserted then
-				-- first headland wp found, add new headland here
-				for _, p in ipairs(newHeadlands) do
-					table.insert(newWaypoints, Waypoint.initFromGeneratedWp(p, #newWaypoints))
-				end
-				newHeadlandInserted = true
-			end
-			-- skip this wp when new headland already added
-		else
-			table.insert(newWaypoints, self.waypoints[origIx])
-		end
-		origIx = origIx + 1
-	end
-	self.waypoints = newWaypoints
-	self:enrichWaypointData()
-end
-
 --- Move every non-headland waypoint of the course (up/down rows only) to their offset position
-function Course:offsetUpDownRows(offsetX, offsetZ)
+function Course:offsetUpDownRows(offsetX, offsetZ, useSameTurnWidth)
+	local currentOffsetX = offsetX
 	for i, _ in ipairs(self.waypoints) do
 		if self:isTurnStartAtIx(i) then
 			-- turn start waypoints point to the turn end wp, for example at the row end they point 90 degrees to the side
 			-- from the row direction. This is a problem when there's an offset so use the direction of the previous wp
 			-- when calculating the offset for a turn start wp.
-			self.waypoints[i]:setOffsetPosition(offsetX, offsetZ, self.waypoints[i - 1].dx, self.waypoints[i - 1].dz)
+			self.waypoints[i]:setOffsetPosition(currentOffsetX, offsetZ, self.waypoints[i - 1].dx, self.waypoints[i - 1].dz)
+			if useSameTurnWidth then
+				-- flip the offset for the next row (symmetric lane change) so every turn for every vehicle is of the same width
+				currentOffsetX = - currentOffsetX
+			end
 		else
-			self.waypoints[i]:setOffsetPosition(offsetX, offsetZ)
+			self.waypoints[i]:setOffsetPosition(currentOffsetX, offsetZ)
 		end
 	end
 	self:enrichWaypointData()
@@ -1025,8 +1007,10 @@ end
 --- there are at least 4 vehicles in the group), a 0 means the vehicle in the middle, for which obviously no offset
 --- headland is required as it it driving on the original headland.
 --- @param width number working width of one vehicle
+--- @param useSameTurnWidth boolean row end turns are always the same width: 'symmetric lane change' enabled, meaning
+--- after each turn we reverse the offset
 --- @return Course the course with the appropriate offset applied.
-function Course:calculateOffsetCourse(nVehicles, position, width)
+function Course:calculateOffsetCourse(nVehicles, position, width, useSameTurnWidth)
 	-- find out the absolute offset in meters first
 	local offset
 	if nVehicles % 2 == 0 then
@@ -1069,7 +1053,7 @@ function Course:calculateOffsetCourse(nVehicles, position, width)
 			upDownCourse, ix = self:getNextNonHeadlandSection(ix)
 			if upDownCourse:getNumberOfWaypoints() > 0 then
 				courseplay.debugFormat(7, 'Up/down section to %d', ix)
-				upDownCourse:offsetUpDownRows(offset, 0)
+				upDownCourse:offsetUpDownRows(offset, 0, useSameTurnWidth)
 				offsetCourse:append(upDownCourse)
 			end
 		end
